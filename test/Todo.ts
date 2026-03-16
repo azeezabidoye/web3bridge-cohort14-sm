@@ -1,127 +1,86 @@
-import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
-import {
-  time,
-  loadFixture,
-} from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { expect } from "chai";
-import hre from "hardhat";
+import { network } from "hardhat";
 
-describe("Lock", function () {
-  // We define a fixture to reuse the same setup in every test.
-  // We use loadFixture to run this setup once, snapshot that state,
-  // and reset Hardhat Network to that snapshot in every test.
-  async function deployOneYearLockFixture() {
-    const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
-    const ONE_GWEI = 1_000_000_000;
+const { ethers } = await network.connect();
 
-    const lockedAmount = ONE_GWEI;
-    const unlockTime = (await time.latest()) + ONE_YEAR_IN_SECS;
-
-    // Contracts are deployed using the first signer/account by default
-    const [owner, otherAccount] = await hre.ethers.getSigners();
-
-    const Lock = await hre.ethers.getContractFactory("Lock");
-    const lock = await Lock.deploy(unlockTime, { value: lockedAmount });
-
-    return { lock, unlockTime, lockedAmount, owner, otherAccount };
+describe("Todo", function () {
+  async function deployTodo() {
+    const todo = await ethers.deployContract("Todo");
+    return { todo };
   }
 
-  describe("Deployment", function () {
-    it("Should set the right unlockTime", async function () {
-      const { lock, unlockTime } = await loadFixture(deployOneYearLockFixture);
-
-      expect(await lock.unlockTime()).to.equal(unlockTime);
-    });
-
-    it("Should set the right owner", async function () {
-      const { lock, owner } = await loadFixture(deployOneYearLockFixture);
-
-      expect(await lock.owner()).to.equal(owner.address);
-    });
-
-    it("Should receive and store the funds to lock", async function () {
-      const { lock, lockedAmount } = await loadFixture(
-        deployOneYearLockFixture,
-      );
-
-      expect(await hre.ethers.provider.getBalance(lock.target)).to.equal(
-        lockedAmount,
-      );
-    });
-
-    it("Should fail if the unlockTime is not in the future", async function () {
-      // We don't use the fixture here because we want a different deployment
-      const latestTime = await time.latest();
-      const Lock = await hre.ethers.getContractFactory("Lock");
-      await expect(Lock.deploy(latestTime, { value: 1 })).to.be.revertedWith(
-        "Unlock time should be in the future",
-      );
-    });
+  it("Should get all tasks with getAllTasks()", async function () {
+    const { todo } = await deployTodo();
+    expect((await todo.getAllTasks()).length).to.equal(0);
   });
 
-  describe("Withdrawals", function () {
-    describe("Validations", function () {
-      it("Should revert with the right error if called too soon", async function () {
-        const { lock } = await loadFixture(deployOneYearLockFixture);
+  it("Should create new tasks with createTask()", async function () {
+    const { todo } = await deployTodo();
+    const [newTask1, newTask2] = ["Do some Laundry", "Write some Code"];
 
-        await expect(lock.withdraw()).to.be.revertedWith(
-          "You can't withdraw yet",
-        );
-      });
+    await Promise.all([todo.createTask(newTask1), todo.createTask(newTask2)]);
 
-      it("Should revert with the right error if called from another account", async function () {
-        const { lock, unlockTime, otherAccount } = await loadFixture(
-          deployOneYearLockFixture,
-        );
+    const tasks = await todo.getAllTasks();
+    console.log(tasks);
 
-        // We can increase the time in Hardhat Network
-        await time.increaseTo(unlockTime);
+    const [title0, title1, length] = [
+      tasks[0].title,
+      tasks[1].title,
+      tasks.length,
+    ];
+    expect(title0).to.equal(newTask1);
+    expect(title1).to.equal(newTask2);
+    expect(length).to.equal(2);
+  });
 
-        // We use lock.connect() to send a transaction from another account
-        await expect(lock.connect(otherAccount).withdraw()).to.be.revertedWith(
-          "You aren't the owner",
-        );
-      });
+  it("Should mark a task as completed with markComplete()", async function () {
+    const { todo } = await deployTodo();
+    const taskId = 1;
 
-      it("Shouldn't fail if the unlockTime has arrived and the owner calls it", async function () {
-        const { lock, unlockTime } = await loadFixture(
-          deployOneYearLockFixture,
-        );
+    await todo.createTask("Do some Laundry");
+    const tasksBefore = await todo.getAllTasks();
+    console.log(tasksBefore);
 
-        // Transactions are sent using the first signer by default
-        await time.increaseTo(unlockTime);
+    expect(tasksBefore[0].title).to.equal("Do some Laundry");
+    expect(tasksBefore[0].isComplete).to.equal(false);
 
-        await expect(lock.withdraw()).not.to.be.reverted;
-      });
-    });
+    await todo.markComplete(taskId);
 
-    describe("Events", function () {
-      it("Should emit an event on withdrawals", async function () {
-        const { lock, unlockTime, lockedAmount } = await loadFixture(
-          deployOneYearLockFixture,
-        );
+    const tasksAfter = await todo.getAllTasks();
+    console.log(tasksAfter);
+    expect(tasksAfter[0].isComplete).to.equal(true);
+  });
 
-        await time.increaseTo(unlockTime);
+  it("Should update a task's title with updateTask()", async function () {
+    const { todo } = await deployTodo();
+    const taskId = 1;
 
-        await expect(lock.withdraw())
-          .to.emit(lock, "Withdrawal")
-          .withArgs(lockedAmount, anyValue); // We accept any value as `when` arg
-      });
-    });
+    await todo.createTask("Read Ethereum book");
+    await todo.updateTask(taskId, "Watch football");
 
-    describe("Transfers", function () {
-      it("Should transfer the funds to the owner", async function () {
-        const { lock, unlockTime, lockedAmount, owner } = await loadFixture(
-          deployOneYearLockFixture,
-        );
+    const tasks = await todo.getAllTasks();
+    console.log(tasks);
+    expect(tasks[0].title).to.equal("Watch football");
+  });
 
-        await time.increaseTo(unlockTime);
+  it("Should delete a task with deleteTask()", async function () {
+    const { todo } = await deployTodo();
+    const taskId = 1;
 
-        await expect(lock.withdraw()).to.changeEtherBalances(
-          [owner, lock],
-          [lockedAmount, -lockedAmount],
-        );
-      });
-    });
+    await Promise.all([
+      todo.createTask("Read newspaper"),
+      todo.createTask("Trim the flowers"),
+      todo.createTask("Skate in and out"),
+    ]);
+
+    const tasksBefore = await todo.getAllTasks();
+    console.log(tasksBefore);
+
+    await todo.deleteTask(taskId);
+
+    const tasksAfter = await todo.getAllTasks();
+    console.log(tasksAfter.length);
+    console.log(tasksAfter);
+    expect(tasksAfter.length).to.equal(2);
   });
 });
